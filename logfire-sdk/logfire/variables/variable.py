@@ -1028,8 +1028,15 @@ class TemplateVariable(Variable[T_co], Generic[T_co, InputsT]):
         self.template_mismatch_policy = template_mismatch_policy
 
     def get_template_inputs_schema(self) -> dict[str, Any]:
-        """Return the JSON schema derived from `inputs_type`."""
-        return self._inputs_type_adapter.json_schema()
+        """Return the JSON schema derived from `inputs_type`.
+
+        Built in serialization mode so the declared property names are the
+        names templates actually render with (see `_inputs_to_context`, which
+        dumps models by alias): a field with `alias='userName'` is declared as
+        `userName`, and a field with only a `validation_alias` is declared
+        under its field name, matching the render context.
+        """
+        return self._inputs_type_adapter.json_schema(mode='serialization')
 
     def to_config(self) -> VariableConfig:
         """Create a VariableConfig, including `template_inputs_schema`."""

@@ -9,7 +9,7 @@ import warnings
 from typing import Any
 
 import pytest
-from pydantic import BaseModel
+from pydantic import AliasGenerator, BaseModel, ConfigDict, Field
 
 import logfire
 from logfire._internal.config import LocalVariablesOptions
@@ -300,6 +300,110 @@ class TestTemplateVariable:
 
         resolved2 = var.get(MyInputs(user_name='Bob'))
         assert resolved2.value == 'Welcome Bob!'
+
+    def test_aliased_field_renders_under_declared_name(self, config_kwargs: dict[str, Any]):
+        """Regression test for #2915: a field alias renders under its declared name.
+
+        The template inputs schema declares the alias (`userName`), so the
+        render context must use it too — previously `{{userName}}` rendered
+        empty while `{{user_name}}` rendered but warned as undeclared.
+        """
+
+        class Inputs(BaseModel):
+            user_name: str = Field(alias='userName')
+
+        lf = _make_lf(_simple_config('prompt', json.dumps('Hello {{userName}}!')), config_kwargs)
+        var = lf.template_var('prompt', type=str, default='default', inputs_type=Inputs)
+
+        assert list(var.get_template_inputs_schema()['properties']) == ['userName']
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', RuntimeWarning)
+            resolved = var.get(Inputs(userName='Alice'))
+        assert resolved.value == 'Hello Alice!'
+
+    def test_field_name_warns_when_aliased(self, config_kwargs: dict[str, Any]):
+        """With an alias, the field name is no longer a declared template field."""
+
+        class Inputs(BaseModel):
+            user_name: str = Field(alias='userName')
+
+        lf = _make_lf(_simple_config('prompt', json.dumps('Hello {{user_name}}!')), config_kwargs)
+        var = lf.template_var('prompt', type=str, default='default', inputs_type=Inputs)
+
+        with pytest.warns(RuntimeWarning, match="references 'user_name'"):
+            resolved = var.get(Inputs(userName='Alice'))
+        assert resolved.value == 'Hello !'
+
+    def test_serialization_alias_renders_under_declared_name(self, config_kwargs: dict[str, Any]):
+        """A field with only a `serialization_alias` renders under that alias."""
+
+        class Inputs(BaseModel):
+            user_name: str = Field(serialization_alias='userName')
+
+        lf = _make_lf(_simple_config('prompt', json.dumps('Hello {{userName}}!')), config_kwargs)
+        var = lf.template_var('prompt', type=str, default='default', inputs_type=Inputs)
+
+        assert list(var.get_template_inputs_schema()['properties']) == ['userName']
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', RuntimeWarning)
+            resolved = var.get(Inputs(user_name='Alice'))
+        assert resolved.value == 'Hello Alice!'
+
+    def test_validation_alias_renders_under_field_name(self, config_kwargs: dict[str, Any]):
+        """A field with only a `validation_alias` renders under its field name."""
+
+        class Inputs(BaseModel):
+            user_name: str = Field(validation_alias='userName')
+
+        lf = _make_lf(_simple_config('prompt', json.dumps('Hello {{user_name}}!')), config_kwargs)
+        var = lf.template_var('prompt', type=str, default='default', inputs_type=Inputs)
+
+        assert list(var.get_template_inputs_schema()['properties']) == ['user_name']
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', RuntimeWarning)
+            resolved = var.get(Inputs(userName='Alice'))
+        assert resolved.value == 'Hello Alice!'
+
+    def test_alias_generator_serialization_alias(self, config_kwargs: dict[str, Any]):
+        """An alias generator's serialization alias is the declared/rendered name."""
+
+        def _to_camel(name: str) -> str:
+            parts = name.split('_')
+            return parts[0] + ''.join(part.capitalize() for part in parts[1:])
+
+        class Inputs(BaseModel):
+            model_config = ConfigDict(alias_generator=AliasGenerator(serialization_alias=_to_camel))
+
+            user_name: str
+
+        lf = _make_lf(_simple_config('prompt', json.dumps('Hello {{userName}}!')), config_kwargs)
+        var = lf.template_var('prompt', type=str, default='default', inputs_type=Inputs)
+
+        assert list(var.get_template_inputs_schema()['properties']) == ['userName']
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', RuntimeWarning)
+            resolved = var.get(Inputs(user_name='Alice'))
+        assert resolved.value == 'Hello Alice!'
+
+    def test_nested_model_alias(self, config_kwargs: dict[str, Any]):
+        """Aliases on nested models render under their declared names too."""
+
+        class Inner(BaseModel):
+            user_name: str = Field(alias='userName')
+
+        class Inputs(BaseModel):
+            user: Inner
+
+        lf = _make_lf(_simple_config('prompt', json.dumps('Hello {{user.userName}}!')), config_kwargs)
+        var = lf.template_var('prompt', type=str, default='default', inputs_type=Inputs)
+
+        schema = var.get_template_inputs_schema()
+        inner = schema['$defs']['Inner']
+        assert list(inner['properties']) == ['userName']
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', RuntimeWarning)
+            resolved = var.get(Inputs(user=Inner(userName='Alice')))
+        assert resolved.value == 'Hello Alice!'
 
     def test_registration(self, config_kwargs: dict[str, Any]):
         """template_var() registers in _variables."""

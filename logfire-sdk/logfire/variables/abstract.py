@@ -178,7 +178,11 @@ def _inputs_to_context(inputs: Any) -> dict[str, Any]:
     if inputs is None:
         return {}
     if hasattr(inputs, 'model_dump'):
-        return inputs.model_dump()
+        # Dump by alias so the context keys match the names declared in the
+        # template inputs schema, which is built in serialization mode
+        # (`get_template_inputs_schema`): a field with `alias='userName'`
+        # renders as `{{userName}}`, not `{{user_name}}`.
+        return inputs.model_dump(by_alias=True)
     if isinstance(inputs, Mapping):
         return dict(inputs)  # pyright: ignore[reportUnknownArgumentType]
 
